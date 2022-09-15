@@ -1,4 +1,6 @@
 import argparse
+import ast
+import os.path
 import re
 import sys
 import gzip
@@ -222,8 +224,8 @@ def get_next_stanza_sent(stanza_batch):
             stanza_batch.pop(0)
         return None
 
-def process_batch(batch,args,term_buckets,source_stanza_nlp,target_stanza_nlp):
-    sents_with_terms = []
+def process_batch(batch,source_stanza_nlp,target_stanza_nlp):
+    batch_aligned_chunks = []
 
     source_stanza_prebatch = "\n\nSENTENCEBREAK\n\n".join([sp_to_sent(x[0]) for x in batch])
     target_stanza_prebatch = "\n\nSENTENCEBREAK\n\n".join([sp_to_sent(x[1]) for x in batch])
@@ -244,8 +246,9 @@ def process_batch(batch,args,term_buckets,source_stanza_nlp,target_stanza_nlp):
         source_stanza_sent = get_next_stanza_sent(source_stanza_batch)
         target_stanza_sent = get_next_stanza_sent(target_stanza_batch)
 
-        #This occurs if there are multiple sentences on the line according so Stanza, skip those
+        #This occurs if there are multiple sentences on the line according to Stanza, skip those
         if not source_stanza_sent or not target_stanza_sent:
+            batch_aligned_chunks += []
             continue
 
         source_sent_words = source_stanza_sent.words
@@ -264,20 +267,14 @@ def process_batch(batch,args,term_buckets,source_stanza_nlp,target_stanza_nlp):
             #sys.stderr.write("Problem with mapping stanza tokens to sp subwords.\n")
             #sys.stderr.write(f"Stanza words: {source_sent_words}\n")
             #sys.stderr.write(f"SP subwords: {sp_source_tokens}\n")
+            batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment),[]))
             continue
         if target_stanza_to_sp is None:
             #sys.stderr.write("Problem with mapping stanza tokens to sp subwords.\n")
             #sys.stderr.write(f"Stanza words: {target_sent_words}\n")
             #sys.stderr.write(f"SP subwords: {sp_target_tokens}\n")
+            batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment),[]))
             continue
-
-        alignment_dict = {}
-        for token_alignment in line_alignment.split():
-            source_index, target_index = [int(x) for x in token_alignment.split('-') if '-' in token_alignment]
-            if source_index in alignment_dict:
-                alignment_dict[source_index].append(target_index)
-            else:
-                alignment_dict[source_index] = [target_index]
 
         aligned_chunks = get_aligned_chunks(
             source_noun_chunks,
@@ -287,48 +284,85 @@ def process_batch(batch,args,term_buckets,source_stanza_nlp,target_stanza_nlp):
             line_alignment,
             source_stanza_to_sp,
             target_stanza_to_sp,
-            alignment_dict)
+            line_alignment)
 
         if (aligned_chunks):
-            # truncate term list to max term per sentence value
-            if len(aligned_chunks) > args.max_terms_per_sent:
-                aligned_chunks = random.sample(aligned_chunks, args.max_terms_per_sent)
-
-            # look for a bucket with room
-            bucket_found = False
-            for bucket_index in range(0, len(aligned_chunks) - 1):
-                if (term_buckets[bucket_index] <=
-                        term_buckets[bucket_index + 1] * args.terms_per_sent_ratio):
-                    aligned_chunks = random.sample(aligned_chunks, bucket_index + 1)
-                    term_buckets[bucket_index] += 1
-                    bucket_found = True
-                    break
-
-            # if no room found in lower buckets, place sentence in the maximal bucket for its term count
-            if not bucket_found:
-                term_buckets[len(aligned_chunks) - 1] += 1
 
             # make sure that the chunks are in left to right order
             aligned_chunks.sort(key=lambda x: max(x[3]))
 
-            (output_split, output_alignment) = annotate_terms(
-                args,
-                source_line_sp,
-                aligned_chunks,
-                target_sp_model,
-                alignment_dict)
+            #TODO: the lemmas are in incorrect order, check that
+            batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment),
+                [(list(a),[get_bare_stanza_lemma(e) for e in b],[get_bare_stanza_lemma(f) for f in c],list(d)) for
+                 (a,b,c,d) in aligned_chunks]))
+        else:
+            batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment),[]))
 
-            output_alignment_string = ""
-            for (source_index, target_indices) in output_alignment:
-                for target_index in target_indices:
-                    output_alignment_string += f"{source_index}-{target_index} "
+    #if len(source_stanza_batch) != 0 or len(target_stanza_batch) != 0:
+    #    print("should not happen")
 
-            sents_with_terms.append((" ".join(output_split),target_line_sp,output_alignment_string))
+    return batch_aligned_chunks
 
-    if len(source_stanza_batch) != 0 or len(target_stanza_batch) != 0:
-        print("what")
+def filter_chunks(aligned_chunks,term_buckets):
+    # truncate term list to max term per sentence value
+    if len(aligned_chunks) > args.max_terms_per_sent:
+        aligned_chunks = random.sample(aligned_chunks, args.max_terms_per_sent)
 
-    return sents_with_terms
+    # look for a bucket with room
+    bucket_found = False
+    for bucket_index in range(0, len(aligned_chunks) - 1):
+        if (term_buckets[bucket_index] <=
+                term_buckets[bucket_index + 1] * args.terms_per_sent_ratio):
+            aligned_chunks = random.sample(aligned_chunks, bucket_index + 1)
+            term_buckets[bucket_index] += 1
+            bucket_found = True
+            break
+
+    # if no room found in lower buckets, place sentence in the maximal bucket for its term count
+    if not bucket_found:
+        term_buckets[len(aligned_chunks) - 1] += 1
+    return (aligned_chunks,term_buckets)
+
+def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
+        target_sp_model,alignment_dict):
+
+    alignment = list(alignment_dict.items())
+    output_source_line_split = source_line_sp.split()
+    if args.annotation_method == "lemma-nonfac-int-append":
+        insertion_offset = 1
+        for target_alignment, source_lemmas, target_lemmas, source_alignment in aligned_chunks:
+            term_start_insertion_point = min(source_alignment) - 1 + insertion_offset
+            output_source_line_split[term_start_insertion_point:term_start_insertion_point] = [
+                args.term_start_tag
+            ]
+
+            term_start_alignment = (term_start_insertion_point, [min(target_alignment)])
+
+            alignment = alignment[0:term_start_insertion_point] + [term_start_alignment] + [
+                (x[0] + 1, x[1]) for x in alignment[term_start_insertion_point:]]
+
+            insertion_offset += 1
+            insertion_point = max(source_alignment) + insertion_offset
+            chunk_bare_lemmas_sp = target_sp_model.encode_as_pieces(
+                " ".join(target_lemmas))
+
+            sp_lemma_count = len(chunk_bare_lemmas_sp)
+
+            term_end_alignment = (insertion_point, [max(target_alignment)])
+            alignment = alignment[0:insertion_point] + [term_end_alignment] + [
+                (x[0] + sp_lemma_count, x[1]) for x in alignment[insertion_point:]]
+
+            sp_lemma_string = " ".join(chunk_bare_lemmas_sp)
+            output_source_line_split[insertion_point:insertion_point] = [
+                f"{args.term_end_tag} {sp_lemma_string} {args.trans_end_tag}"]
+            insertion_offset += 1
+
+    output_alignment_string = ""
+    for (source_index, target_indices) in alignment:
+        for target_index in target_indices:
+            output_alignment_string += f"{source_index}-{target_index} "
+
+    return (" ".join(output_source_line_split), target_line_sp.strip(), output_alignment_string)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -396,11 +430,20 @@ if __name__ == "__main__":
     output_target_path = re.sub(r".gz$", f".{args.output_suffix}.txt", args.target_corpus)
     output_alignments_path = re.sub(r".gz$", f".{args.output_suffix}.txt", args.alignment_file)
 
+    existing_term_annotations_path = re.sub(r".gz$", f".annotations.txt", args.source_corpus)
+    new_term_annotations_path = re.sub(r".gz$", f".new_annotations.txt", args.source_corpus)
+
+    #If no existing term annotations, create an empty file to keep later file reading simple
+    if not os.path.exists(existing_term_annotations_path):
+        open(existing_term_annotations_path, 'a').close()
+
     source_stanza_nlp = stanza.Pipeline(args.source_lang, processors='tokenize,pos,lemma,depparse')
     target_stanza_nlp = stanza.Pipeline(args.target_lang, processors='tokenize,pos,lemma,depparse')
 
     source_sp_model = spm.SentencePieceProcessor(args.source_spm)
     target_sp_model = spm.SentencePieceProcessor(args.target_spm)
+
+
 
     with \
         gzip.open(args.source_corpus,'rt', encoding="utf8") as orig_source,\
@@ -408,11 +451,16 @@ if __name__ == "__main__":
         gzip.open(args.alignment_file,'rt', encoding="utf8") as orig_alignments,\
         open(output_source_path,'wt', encoding="utf8") as output_source,\
         open(output_target_path,'wt', encoding="utf8") as output_target,\
-        open(output_alignments_path,'wt', encoding="utf8") as output_alignments:
+        open(output_alignments_path,'wt', encoding="utf8") as output_alignments,\
+        open(existing_term_annotations_path,'rt', encoding="utf8") as existing_term_annotations, \
+        open(new_term_annotations_path, 'wt', encoding="utf8") as new_term_annotations:
+
         sent_count = 0
+        batch_counter = 0
         sents_with_terms_count = 0
 
         batch = []
+
         #source, target and alignment have identical amount of lines
         batch_start_time = datetime.now()
         sys.stdout.write("Starting processing\n")
@@ -420,31 +468,58 @@ if __name__ == "__main__":
             sent_count += 1
             target_line_sp = target.readline()
             line_alignment = orig_alignments.readline()
-
-            batch.append((source_line_sp,target_line_sp,line_alignment))
-
-            if sent_count % args.batch_size == 0:
-                sents_with_terms = process_batch(batch,args,term_buckets,source_stanza_nlp,target_stanza_nlp)
-                sents_with_terms_count += len(sents_with_terms)
-                for (term_source,term_target,term_alignment) in sents_with_terms:
-                    output_source.write(term_source+"\n")
-                    output_target.write(term_target+"\n")
-                    output_alignments.write(term_alignment+"\n")
-                if args.max_sents and sents_with_terms_count >= args.max_sents:
-                    break
+            alignment_dict = {}
+            for token_alignment in line_alignment.split():
+                source_index, target_index = [int(x) for x in token_alignment.split('-') if '-' in token_alignment]
+                if source_index in alignment_dict:
+                    alignment_dict[source_index].append(target_index)
                 else:
-                    batch = []
-                    sys.stdout.write(f"Processed {sent_count} sentences."+
-                        f"Batch duration {datetime.now()-batch_start_time}. Starting new batch.\n")
-                    batch_start_time = datetime.now()
+                    alignment_dict[source_index] = [target_index]
+
+            existing_term_annotation = existing_term_annotations.readline()
+
+            def process_term_line(
+                    aligned_chunks,term_buckets,source_line_sp,target_line_sp,alignment_dict):
+                (aligned_chunks, term_buckets) = filter_chunks(aligned_chunks, term_buckets)
+                (term_source, term_target, term_alignment) = annotate(
+                    args, source_line_sp, target_line_sp, aligned_chunks, target_sp_model, alignment_dict)
+                output_source.write(term_source + "\n")
+                output_target.write(term_target + "\n")
+                output_alignments.write(term_alignment + "\n")
+
+
+            #if there are pre-saved term annotations, use them
+            if existing_term_annotation:
+                #Parse the pre-saved chunks
+                aligned_chunks = ast.literal_eval(existing_term_annotation)
+                if aligned_chunks:
+                    process_term_line(aligned_chunks)
+                    sents_with_terms_count += 1
+            else:
+                #start batching for stanza
+                batch_counter += 1
+                batch.append((source_line_sp, target_line_sp, alignment_dict))
+                if batch_counter % args.batch_size == 0:
+                    batch_aligned_chunks = process_batch(batch,source_stanza_nlp,target_stanza_nlp)
+                    #sents_with_terms_count += len(sents_with_terms)
+                    for ((source_line_sp,target_line_sp,line_alignment),aligned_chunks) in batch_aligned_chunks:
+                        if aligned_chunks:
+                            # TODO: save the chunks to file
+                            process_term_line(aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment)
+                            sents_with_terms_count += 1
+                    if args.max_sents and sents_with_terms_count >= args.max_sents:
+                        break
+                    else:
+                        batch = []
+                        sys.stdout.write(f"Processed {sent_count} sentences."+
+                            f"Batch duration {datetime.now()-batch_start_time}. Starting new batch.\n")
+                        batch_start_time = datetime.now()
 
         if batch:
-            sents_with_terms = process_batch(batch,args,term_buckets,source_stanza_nlp,target_stanza_nlp)
-            sents_with_terms_count += len(sents_with_terms)
-            for (source,target,alignment) in sents_with_terms:
-                output_source.write(source+"\n")
-                output_target.write(target+"\n")
-                output_alignments.write(alignment+"\n")
+            for ((source_line_sp, target_line_sp, line_alignment), aligned_chunks) in batch_aligned_chunks:
+                process_term_line(aligned_chunks, term_buckets, source_line_sp, target_line_sp, line_alignment)
+
+        # TODO: concatenate the old and new chunk files
 
         print(f"Sentences processed {sent_count}, term sentences generated {sents_with_terms_count}")
 
