@@ -390,14 +390,20 @@ if __name__ == "__main__":
                     "The corpora are expected to be segmented with sentencepiece.")
     parser.add_argument("--source_corpus", type=str,
                         help="Corpus containing the source sentences.")
+    parser.add_argument("--source_output_path", type=str,
+                        help="Path where the annotated source will be stored.")
     parser.add_argument("--target_corpus", type=str,
                         help="Corpus containing the target sentences.")
+    parser.add_argument("--target_output_path", type=str,
+                        help="Path where the annotated target will be stored.")
     parser.add_argument("--source_lang", type=str,
                         help="Source language for lemmatization.")
     parser.add_argument("--target_lang", type=str,
                         help="Target language for lemmatization.")
     parser.add_argument("--alignment_file", type=str,
                         help="File containing the alignments between the source and target corpora.")
+    parser.add_argument("--alignment_output_path", type=str,
+                        help="Path where the annotated source and target alignment will be stored.")
     parser.add_argument("--source_spm", type=str,
                         help="Source sentencepiece model.")
     parser.add_argument("--target_spm", type=str,
@@ -416,7 +422,6 @@ if __name__ == "__main__":
                              "append/replace/mask+append. See WMT21 terminology task papers for details." +
                              "Currently the approach used is lemma-nonfac-int-append, since it seems" +
                              "to have worked best in WMT21 (and is simple).")
-
     parser.add_argument("--term_start_tag", type=str, default="<term_start>",
                         help="Tag that is inserted before the source term")
     parser.add_argument("--term_end_tag", type=str, default="<term_end>",
@@ -445,11 +450,21 @@ if __name__ == "__main__":
         print("All input files should have .gz extension")
         sys.exit()
 
-    output_source_path = re.sub(r".gz$", f".{args.output_suffix}.txt", args.source_corpus)
-    output_target_path = re.sub(r".gz$", f".{args.output_suffix}.txt", args.target_corpus)
-    output_alignments_path = re.sub(r".gz$", f".{args.output_suffix}.txt", args.alignment_file)
+    if args.alignment_output_path:
+        output_alignments_path = args.alignment_output_path
+    else:
+        output_alignments_path = re.sub(r".gz$", f".{args.output_suffix}.gz", args.alignment_file)
+    if args.source_output_path:
+        output_source_path = args.source_output_path
+    else:
+        output_source_path = re.sub(r".gz$", f".{args.output_suffix}.gz", args.source_corpus)
+    if args.target_output_path:
+        output_target_path = args.target_output_path
+    else:
+        output_target_path = re.sub(r".gz$", f".{args.output_suffix}.gz", args.target_corpus)
 
-    existing_term_annotations_path = re.sub(r".gz$", f".annotations.txt", args.source_corpus)
+
+    existing_term_annotations_path = re.sub(r".gz$", f".annotations.gz", args.source_corpus)
     new_term_annotations_path = re.sub(r".gz$", f".new_annotations.txt", args.source_corpus)
 
     #If no existing term annotations, create an empty file to keep later file reading simple
@@ -466,10 +481,10 @@ if __name__ == "__main__":
         gzip.open(args.source_corpus,'rt', encoding="utf8") as orig_source,\
         gzip.open(args.target_corpus,'rt', encoding="utf8") as target,\
         gzip.open(args.alignment_file,'rt', encoding="utf8") as orig_alignments,\
-        open(output_source_path,'wt', encoding="utf8") as output_source,\
-        open(output_target_path,'wt', encoding="utf8") as output_target,\
-        open(output_alignments_path,'wt', encoding="utf8") as output_alignments,\
-        open(existing_term_annotations_path,'rt', encoding="utf8") as existing_term_annotations, \
+        gzip.open(output_source_path,'wt', encoding="utf8") as output_source,\
+        gzip.open(output_target_path,'wt', encoding="utf8") as output_target,\
+        gzip.open(output_alignments_path,'wt', encoding="utf8") as output_alignments,\
+        gzip.open(existing_term_annotations_path,'rt', encoding="utf8") as existing_term_annotations, \
         open(new_term_annotations_path, 'wt', encoding="utf8") as new_term_annotations:
 
         sent_count = 0
@@ -537,7 +552,7 @@ if __name__ == "__main__":
 
         #handle possible unfinished batch (should not fire usually, since batch will be empty
         # when max sents is reached, only occurs if whole corpus is analyzed)
-        if batch:
+        if batch and not (args.max_sents and sents_with_terms_count >= args.max_sents):
             for ((source_line_sp, target_line_sp, line_alignment), aligned_chunks) in batch_aligned_chunks:
                 if aligned_chunks:
                     new_term_annotations.write(str(aligned_chunks) + '\n')
@@ -546,7 +561,7 @@ if __name__ == "__main__":
                 else:
                     new_term_annotations.write(f"[]\n")
 
-    with open(existing_term_annotations_path,'at', encoding="utf8") as existing_term_annotations, \
+    with gzip.open(existing_term_annotations_path,'at', encoding="utf8") as existing_term_annotations, \
          open(new_term_annotations_path, 'rt', encoding="utf8") as new_term_annotations:
         for line in new_term_annotations:
             existing_term_annotations.write(line)
