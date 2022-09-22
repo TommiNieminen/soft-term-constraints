@@ -161,52 +161,18 @@ def get_bare_stanza_lemma(stanza_token):
     # if the compound was hyphenated, the hash overwrites the hyphen, so restore hyphen
     # note that this will probably fail in some cases, where there are more than two parts to the
     # compound and some are hyphenated and others not (but the effect will be small).
-    if "#" in stanza_token.lemma and "#" not in stanza_token.text:
-        if "-" in stanza_token.text:
-            return stanza_token.lemma.replace('#','-')
+    if stanza_token and stanza_token.lemma and stanza_token.text:
+        if "#" in stanza_token.lemma and "#" not in stanza_token.text:
+            if "-" in stanza_token.text:
+                return stanza_token.lemma.replace('#','-')
+            else:
+                return stanza_token.lemma.replace('#','')
         else:
-            return stanza_token.lemma.replace('#','')
+            return stanza_token.lemma
     else:
-        return stanza_token.lemma
+        sys.stderr.write(f"Invalid stanza token {stanza_token}\n")
+        return None
 
-def annotate_terms(
-        args,
-        source_line_sp,
-        aligned_chunks,
-        target_sp_model,
-        alignment_dict):
-    alignment = list(alignment_dict.items())
-
-    output_source_line_split = source_line_sp.split()
-    if args.annotation_method == "lemma-nonfac-int-append":
-        insertion_offset = 1
-        for target_alignment, source_chunk, target_chunk, source_alignment in aligned_chunks:
-            term_start_insertion_point = min(source_alignment)-1 + insertion_offset
-            output_source_line_split[term_start_insertion_point:term_start_insertion_point] = [
-                args.term_start_tag
-            ]
-
-            term_start_alignment = (term_start_insertion_point,[min(target_alignment)])
-
-            alignment = alignment[0:term_start_insertion_point] + [term_start_alignment] + [
-                (x[0]+1,x[1]) for x in alignment[term_start_insertion_point:]]
-
-            insertion_offset += 1
-            insertion_point = max(source_alignment) + insertion_offset
-            chunk_bare_lemmas_sp = target_sp_model.encode_as_pieces(
-                " ".join([get_bare_stanza_lemma(x) for x in target_chunk]))
-
-            sp_lemma_count = len(chunk_bare_lemmas_sp)
-
-            term_end_alignment = (insertion_point, [max(target_alignment)])
-            alignment = alignment[0:insertion_point] + [term_end_alignment] + [
-                (x[0] + sp_lemma_count, x[1]) for x in alignment[insertion_point:]]
-
-            sp_lemma_string = " ".join(chunk_bare_lemmas_sp)
-            output_source_line_split[insertion_point:insertion_point] = [f"{args.term_end_tag} {sp_lemma_string} {args.trans_end_tag}"]
-            insertion_offset += 1
-
-    return (output_source_line_split,alignment)
 
 def sp_to_sent(sp_line):
     sp_tokens = sp_line.split()
@@ -295,9 +261,12 @@ def process_batch(batch,source_stanza_nlp,target_stanza_nlp):
             # make sure that the chunks are in left to right order
             aligned_chunks.sort(key=lambda x: max(x[3]))
 
+            plain_aligned_chunks = [(list(a),[get_bare_stanza_lemma(e) for e in b],
+                                     [get_bare_stanza_lemma(f) for f in c],list(d)) for (a,b,c,d) in aligned_chunks]
+            #if getting a bare lemma fails, None will be returned. Remove those chunks from the results.
+            plain_aligned_chunks = [x for x in plain_aligned_chunks if not None in x[1] and not None in x[2]]
             batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment),
-                [(list(a),[get_bare_stanza_lemma(e) for e in b],[get_bare_stanza_lemma(f) for f in c],list(d)) for
-                 (a,b,c,d) in aligned_chunks]))
+                plain_aligned_chunks))
         else:
             batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment),[]))
 
