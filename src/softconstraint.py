@@ -438,10 +438,25 @@ if __name__ == "__main__":
                         help="Max amount of terms to annotate per sentence.")
     parser.add_argument("--batch_size", type=int, default=100,
                         help="Batch size for stanza processing.")
-    parser.add_argument("--max_sents", type=int,
-                        help="Max amount of sentences with terms to generate. If not defined, generate all.")
+    parser.add_argument("--max_sents", type=str,
+                        help="Max amount of sentences with terms to generate. If not defined, generate all. " +
+                        "k can be used for 1000s and M for millions")
+
+
+
 
     args = parser.parse_args()
+
+    if args.max_sents:
+        if args.max_sents.isnumeric():
+            int_max_sents = int(args.max_sents)
+        elif args.max_sents[-1] in ['k','M'] and args.max_sents[0:-1].isnumeric():
+            max_sents = args.max_sents.replace('k',"000").replace('M',"000000")
+            int_max_sents = int(max_sents)
+        else:
+            sys.stderr("Invalid max sent count arg")
+            sys.exit()
+
     term_buckets = [0] * args.max_terms_per_sent
     #all input files should be gzipped
     if not (args.source_corpus.endswith(".gz") and
@@ -517,7 +532,7 @@ if __name__ == "__main__":
                 if aligned_chunks:
                     process_term_line(aligned_chunks,term_buckets,source_line_sp,target_line_sp,current_alignment_dict)
                     sents_with_terms_count += 1
-                    if args.max_sents and sents_with_terms_count >= args.max_sents:
+                    if args.max_sents and sents_with_terms_count >= int_max_sents:
                         break
             else:
                 #start batching for stanza
@@ -538,12 +553,12 @@ if __name__ == "__main__":
                             new_term_annotations.write(str(aligned_chunks)+'\n')
                             process_term_line(aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment)
                             sents_with_terms_count += 1
-                            if args.max_sents and sents_with_terms_count >= args.max_sents:
+                            if args.max_sents and sents_with_terms_count >= int_max_sents:
                                 break
                         else:
                             new_term_annotations.write(str(aligned_chunks)+'\n')
                     batch = []
-                    if args.max_sents and sents_with_terms_count >= args.max_sents:
+                    if args.max_sents and sents_with_terms_count >= int_max_sents:
                         break
                     else:
                         sys.stderr.write(f"Processed {sent_count} sentences. "+
