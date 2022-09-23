@@ -481,8 +481,6 @@ if __name__ == "__main__":
         batch_start_time = datetime.now()
         sys.stderr.write("Starting processing\n")
         for source_line_sp in orig_source:
-            #this is for slurm jobs, otherwise the output will be buffered for a long time
-            sys.stderr.flush()
             sent_count += 1
             target_line_sp = target.readline()
             current_line_alignment = orig_alignments.readline()
@@ -535,6 +533,8 @@ if __name__ == "__main__":
                         sys.stderr.write(f"Processed {sent_count} sentences. "+
                             f"Batch duration {datetime.now()-batch_start_time}. Starting new batch.\n")
                         batch_start_time = datetime.now()
+                        # this is for slurm jobs, otherwise the output will be buffered for a long time
+                        sys.stderr.flush()
 
         #handle possible unfinished batch (should not fire usually, since batch will be empty
         # when max sents is reached, only occurs if whole corpus is analyzed)
