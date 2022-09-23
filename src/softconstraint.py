@@ -431,7 +431,7 @@ if __name__ == "__main__":
     if not (args.source_corpus.endswith(".gz") and
             args.target_corpus.endswith(".gz") and
             args.alignment_file.endswith(".gz")):
-        print("All input files should have .gz extension")
+        sys.stderr.write("All input files should have .gz extension\n")
         sys.exit()
 
     if args.alignment_output_path:
@@ -479,8 +479,10 @@ if __name__ == "__main__":
 
         #source, target and alignment have identical amount of lines
         batch_start_time = datetime.now()
-        sys.stdout.write("Starting processing\n")
+        sys.stderr.write("Starting processing\n")
         for source_line_sp in orig_source:
+            #this is for slurm jobs, otherwise the output will be buffered for a long time
+            sys.stderr.flush()
             sent_count += 1
             target_line_sp = target.readline()
             current_line_alignment = orig_alignments.readline()
@@ -551,6 +553,6 @@ if __name__ == "__main__":
             existing_term_annotations.write(line)
     #remove the new annotation file
     os.remove(new_term_annotations_path)
-    print(f"Sentences processed {sent_count}, term sentences generated {sents_with_terms_count}")
+    sys.stderr.write(f"Sentences processed {sent_count}, term sentences generated {sents_with_terms_count}\n")
 
     #print([f"{x[0]+1}: {x[1]}" for x in enumerate(term_buckets)])
