@@ -304,20 +304,28 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
     #sort aligned chunks according to source position
     aligned_chunks.sort(key=lambda x: min(x[3]))
 
-    alignment = list(alignment_dict.items())
+    #alignment is a list of lists, position in the list indicates source index, inner list
+    #contains target indices
+    alignment_items = alignment_dict.items()
+    alignment = [[]] * (max(alignment_dict.keys())+1) # initialize empty list of lists
+    for source_index,target_indices in alignment_items: # populate with alignment
+        alignment[source_index] = target_indices
+
     output_source_line_split = source_line_sp.split()
-    if args.annotation_method == "lemma-nonfac-int-append":
+    if args.annotation_method.startswith("lemma-nonfac-int-append"):
         insertion_offset = 1
         for target_alignment, source_lemmas, target_lemmas, source_alignment in aligned_chunks:
             term_start_insertion_point = min(source_alignment) - 1 + insertion_offset
+            #insert term start tag into split list
             output_source_line_split[term_start_insertion_point:term_start_insertion_point] = [
                 args.term_start_tag
             ]
 
-            term_start_alignment = (term_start_insertion_point, [min(target_alignment)])
+            term_start_alignment = min(target_alignment)
 
+            #this shifts all alignments on the right side of the insertion point
             alignment = alignment[0:term_start_insertion_point] + [term_start_alignment] + [
-                (x[0] + 1, x[1]) for x in alignment[term_start_insertion_point:]]
+                x for x in alignment[term_start_insertion_point:]]
 
             insertion_offset += 1
             insertion_point = max(source_alignment) + insertion_offset
@@ -326,21 +334,55 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
 
             sp_lemma_count = len(chunk_bare_lemmas_sp)
 
-            term_end_alignment = (insertion_point, [max(target_alignment)])
-            alignment = alignment[0:insertion_point] + [term_end_alignment] + [
-                (x[0] + sp_lemma_count, x[1]) for x in alignment[insertion_point:]]
+            term_end_alignment = max(target_alignment)
+            alignment = alignment[0:insertion_point] + [term_end_alignment]*sp_lemma_count + alignment[insertion_point:]
 
             sp_lemma_string = " ".join(chunk_bare_lemmas_sp)
             output_source_line_split[insertion_point:insertion_point] = [
                 f"{args.term_end_tag} {sp_lemma_string} {args.trans_end_tag}"]
             insertion_offset += 1
 
+    # Mask the source terms to make following the constraint more likely
+    # (see Encouraging Neural Machine Translation to Satisfy Terminology Constraints,
+    # Melissa Ailem, Jingshu Liu, and Raheel Qader. 2021.
+    # Encouraging neural machine translation to satisfy terminology constraints.)
+    if "+mask" in args.annotation_method:
+        #this can only become negative, since the only operation affecting it is
+        #the removal of non-word-initial subwords
+        alignment_offset = 0
+        inside_source_term = False
+        for sp_token_index in range(0,len(output_source_line_split)):
+            sp_token = output_source_line_split[sp_token_index]
+            if sp_token == args.term_start_tag:
+                inside_source_term = True
+                continue
+            if sp_token.startswith(args.term_end_tag):
+                inside_source_term = False
+                continue
+            if inside_source_term:
+                if sp_token.startswith('▁'):
+                    output_source_line_split[sp_token_index] = args.mask_tag
+                else:
+                    #Remove empty tokens after loop
+                    output_source_line_split[sp_token_index] = ""
+                    #Add aligment for this token to previous token
+                    alignment[sp_token_index+alignment_offset-1].extend(alignment[0:sp_token_index+alignment_offset])
+                    #Remove this token's alignment from the alignment list
+                    alignment = alignment[0:sp_token_index+alignment_offset] + alignment[sp_token_index+alignment_offset+1:]
+                    alignment_offset -= 1
+        #remove empties
+        output_source_line_split = [x for x in output_source_line_split if x]
+
     output_alignment_string = ""
-    for (source_index, target_indices) in alignment:
+    for source_index, target_indices in enumerate(alignment):
         for target_index in target_indices:
             output_alignment_string += f"{source_index}-{target_index} "
 
-    return (" ".join(output_source_line_split), target_line_sp.strip(), output_alignment_string)
+    source_with_terms = " ".join(output_source_line_split)
+
+
+
+    return (source_with_terms, target_line_sp.strip(), output_alignment_string)
 
 
 def process_term_line(
@@ -397,6 +439,8 @@ if __name__ == "__main__":
                         help="Tag that is inserted after the source term and before translation lemma")
     parser.add_argument("--trans_end_tag", type=str, default="<trans_end>",
                         help="Tag that is inserted after the translation lemma")
+    parser.add_argument("--mask_tag", type=str, default="<term_mask>",
+                        help="Tag that is used to mask the source tokens")
     parser.add_argument("--terms_per_sent_ratio", type=int, default=2,
                         help="If default value is used, for each 100 sentences with one term, " +
                         "output 50 sentences with two terms, 25 sentences with three terms, 13 " +
@@ -538,7 +582,7 @@ if __name__ == "__main__":
 
         #handle possible unfinished batch (should not fire usually, since batch will be empty
         # when max sents is reached, only occurs if whole corpus is analyzed)
-        if batch and not (args.max_sents and sents_with_terms_count >= args.max_sents):
+        if batch and not (args.max_sents and sents_with_terms_count >= int_max_sents):
             for ((source_line_sp, target_line_sp, line_alignment), aligned_chunks) in batch_aligned_chunks:
                 if aligned_chunks:
                     new_term_annotations.write(str(aligned_chunks) + '\n')
