@@ -9,6 +9,9 @@ import sentencepiece as spm
 import random
 from datetime import datetime
 
+from stanza import DownloadMethod
+
+
 class JoinedToken:
     def __init__(self,token,sp_indices):
         self.token = token
@@ -307,6 +310,7 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
     #alignment is a list of lists, position in the list indicates source index, inner list
     #contains target indices
     alignment_items = alignment_dict.items()
+
     alignment = [[]] * (max(alignment_dict.keys())+1) # initialize empty list of lists
     for source_index,target_indices in alignment_items: # populate with alignment
         alignment[source_index] = target_indices
@@ -324,23 +328,23 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
             term_start_alignment = min(target_alignment)
 
             #this shifts all alignments on the right side of the insertion point
-            alignment = alignment[0:term_start_insertion_point] + [term_start_alignment] + [
-                x for x in alignment[term_start_insertion_point:]]
+            alignment[term_start_insertion_point:term_start_insertion_point] = [[term_start_alignment]]
 
             insertion_offset += 1
             insertion_point = max(source_alignment) + insertion_offset
+
             chunk_bare_lemmas_sp = target_sp_model.encode_as_pieces(
                 " ".join(target_lemmas))
 
             sp_lemma_count = len(chunk_bare_lemmas_sp)
 
             term_end_alignment = max(target_alignment)
-            alignment = alignment[0:insertion_point] + [term_end_alignment]*sp_lemma_count + alignment[insertion_point:]
+            #Add two to lemma count to account for the two tags added
+            alignment[insertion_point:insertion_point] = [[term_end_alignment]]*(sp_lemma_count+2)
 
-            sp_lemma_string = " ".join(chunk_bare_lemmas_sp)
-            output_source_line_split[insertion_point:insertion_point] = [
-                f"{args.term_end_tag} {sp_lemma_string} {args.trans_end_tag}"]
-            insertion_offset += 1
+            output_source_line_split[insertion_point:insertion_point] = \
+                [args.term_end_tag] + chunk_bare_lemmas_sp + [args.trans_end_tag]
+            insertion_offset += sp_lemma_count+2
 
     # Mask the source terms to make following the constraint more likely
     # (see Encouraging Neural Machine Translation to Satisfy Terminology Constraints,
@@ -355,18 +359,23 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
             sp_token = output_source_line_split[sp_token_index]
             if sp_token == args.term_start_tag:
                 inside_source_term = True
+                first_term_token = True
                 continue
             if sp_token.startswith(args.term_end_tag):
                 inside_source_term = False
                 continue
             if inside_source_term:
-                if sp_token.startswith('▁'):
+                #only add one mask token per term
+                #alternatively, use sp_token.startswith('▁'): if one mask token per term token is required
+                if first_term_token:
                     output_source_line_split[sp_token_index] = args.mask_tag
+                    first_term_token = False
                 else:
                     #Remove empty tokens after loop
                     output_source_line_split[sp_token_index] = ""
-                    #Add aligment for this token to previous token
-                    alignment[sp_token_index+alignment_offset-1].extend(alignment[0:sp_token_index+alignment_offset])
+                    #Add alignment for this token to previous token, since the mask should be aligned to the same tokens
+                    #as the unmasked source term
+                    alignment[sp_token_index+alignment_offset-1].extend(alignment[sp_token_index+alignment_offset])
                     #Remove this token's alignment from the alignment list
                     alignment = alignment[0:sp_token_index+alignment_offset] + alignment[sp_token_index+alignment_offset+1:]
                     alignment_offset -= 1
@@ -455,9 +464,6 @@ if __name__ == "__main__":
                         help="Max amount of sentences with terms to generate. If not defined, generate all. " +
                         "k can be used for 1000s and M for millions")
 
-
-
-
     args = parser.parse_args()
 
     if args.max_sents:
@@ -499,8 +505,8 @@ if __name__ == "__main__":
     if not os.path.exists(existing_term_annotations_path):
         open(existing_term_annotations_path, 'a').close()
 
-    source_stanza_nlp = stanza.Pipeline(args.source_lang, processors='tokenize,pos,lemma,depparse')
-    target_stanza_nlp = stanza.Pipeline(args.target_lang, processors='tokenize,pos,lemma,depparse')
+    source_stanza_nlp = stanza.Pipeline(args.source_lang, processors='tokenize,pos,lemma,depparse')#,download_method=DownloadMethod.NONE)
+    target_stanza_nlp = stanza.Pipeline(args.target_lang, processors='tokenize,pos,lemma,depparse')#,download_method=DownloadMethod.NONE)
 
     source_sp_model = spm.SentencePieceProcessor(args.source_spm)
     target_sp_model = spm.SentencePieceProcessor(args.target_spm)
