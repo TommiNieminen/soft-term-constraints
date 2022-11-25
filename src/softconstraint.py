@@ -8,9 +8,7 @@ import stanza
 import sentencepiece as spm
 import random
 from datetime import datetime
-
 from stanza import DownloadMethod
-
 
 class JoinedToken:
     def __init__(self,token,sp_indices):
@@ -311,11 +309,14 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
     #contains target indices
     alignment_items = alignment_dict.items()
 
-    alignment = [[]] * (max(alignment_dict.keys())+1) # initialize empty list of lists
-    for source_index,target_indices in alignment_items: # populate with alignment
+    output_source_line_split = source_line_sp.split()
+
+    alignment = [[]] * (len(output_source_line_split))  # initialize empty list of lists
+    for source_index, target_indices in alignment_items:  # populate with alignment
         alignment[source_index] = target_indices
 
-    output_source_line_split = source_line_sp.split()
+    output_source_line_split_with_align = list(zip(output_source_line_split,alignment))
+
     if args.annotation_method.startswith("lemma-nonfac-int-append"):
         insertion_offset = 1
         for target_alignment, source_lemmas, target_lemmas, source_alignment in aligned_chunks:
@@ -346,41 +347,71 @@ def annotate(args,source_line_sp,target_line_sp,aligned_chunks,
                 [args.term_end_tag] + chunk_bare_lemmas_sp + [args.trans_end_tag]
             insertion_offset += sp_lemma_count+2
 
-    # Mask the source terms to make following the constraint more likely
-    # (see Encouraging Neural Machine Translation to Satisfy Terminology Constraints,
-    # Melissa Ailem, Jingshu Liu, and Raheel Qader. 2021.
-    # Encouraging neural machine translation to satisfy terminology constraints.)
-    if "+mask" in args.annotation_method:
-        #this can only become negative, since the only operation affecting it is
-        #the removal of non-word-initial subwords
-        alignment_offset = 0
-        inside_source_term = False
-        for sp_token_index in range(0,len(output_source_line_split)):
-            sp_token = output_source_line_split[sp_token_index]
-            if sp_token == args.term_start_tag:
-                inside_source_term = True
-                first_term_token = True
-                continue
-            if sp_token.startswith(args.term_end_tag):
-                inside_source_term = False
-                continue
-            if inside_source_term:
-                #only add one mask token per term
-                #alternatively, use sp_token.startswith('▁'): if one mask token per term token is required
-                if first_term_token:
-                    output_source_line_split[sp_token_index] = args.mask_tag
-                    first_term_token = False
-                else:
-                    #Remove empty tokens after loop
-                    output_source_line_split[sp_token_index] = ""
-                    #Add alignment for this token to previous token, since the mask should be aligned to the same tokens
-                    #as the unmasked source term
-                    alignment[sp_token_index+alignment_offset-1].extend(alignment[sp_token_index+alignment_offset])
-                    #Remove this token's alignment from the alignment list
-                    alignment = alignment[0:sp_token_index+alignment_offset] + alignment[sp_token_index+alignment_offset+1:]
-                    alignment_offset -= 1
-        #remove empties
-        output_source_line_split = [x for x in output_source_line_split if x]
+        # Optionally mask the source terms to make following the constraint more likely
+        # (see Encouraging Neural Machine Translation to Satisfy Terminology Constraints,
+        # Melissa Ailem, Jingshu Liu, and Raheel Qader. 2021.
+        # Encouraging neural machine translation to satisfy terminology constraints.)
+        if "+mask" in args.annotation_method:
+            #this can only become negative, since the only operation affecting it is
+            #the removal of non-word-initial subwords
+            alignment_offset = 0
+            inside_source_term = False
+            for sp_token_index in range(0,len(output_source_line_split)):
+                sp_token = output_source_line_split[sp_token_index]
+                if sp_token == args.term_start_tag:
+                    inside_source_term = True
+                    first_term_token = True
+                    continue
+                if sp_token.startswith(args.term_end_tag):
+                    inside_source_term = False
+                    continue
+                if inside_source_term:
+                    #only add one mask token per term
+                    #alternatively, use sp_token.startswith('▁'): if one mask token per term token is required
+                    if first_term_token:
+                        output_source_line_split[sp_token_index] = args.mask_tag
+                        first_term_token = False
+                    else:
+                        #Remove empty tokens after loop
+                        output_source_line_split[sp_token_index] = ""
+                        #Add alignment for this token to previous token, since the mask should be aligned to the same tokens
+                        #as the unmasked source term
+                        alignment[sp_token_index+alignment_offset-1].extend(alignment[sp_token_index+alignment_offset])
+                        #Remove this token's alignment from the alignment list
+                        alignment = alignment[0:sp_token_index+alignment_offset] + alignment[sp_token_index+alignment_offset+1:]
+                        alignment_offset -= 1
+            #remove empties
+            output_source_line_split = [x for x in output_source_line_split if x]
+
+    if args.annotation_method.startswith("lemma-nonfac-int-replace"):
+        insertion_offset = 1
+        for target_alignment, source_lemmas, target_lemmas, source_alignment in aligned_chunks:
+
+            term_start_insertion_point = min(source_alignment) - 1 + insertion_offset
+            #insert term start tag before source term
+            output_source_line_split_with_align[term_start_insertion_point:term_start_insertion_point] = [
+                (args.term_start_tag,[min(target_alignment)])
+            ]
+
+            insertion_offset += 1
+
+            chunk_bare_lemmas_sp = target_sp_model.encode_as_pieces(
+                " ".join(target_lemmas))
+
+            #remove source term and add term lemma
+            output_source_line_split_with_align[min(source_alignment)+insertion_offset-1:max(source_alignment)+insertion_offset] = \
+                [(x,[]) for x in chunk_bare_lemmas_sp]
+            insertion_offset += len(chunk_bare_lemmas_sp)-len(source_alignment)
+
+            # insert term end tag after lemma
+            term_end_insertion_point = max(source_alignment) + insertion_offset
+            output_source_line_split_with_align[term_end_insertion_point:term_end_insertion_point] = [
+                (args.term_end_tag, [max(target_alignment)])
+            ]
+            insertion_offset += 1
+
+        alignment = [x[1] for x in output_source_line_split_with_align]
+        output_source_line_split = [x[0] for x in output_source_line_split_with_align]
 
     output_alignment_string = ""
     for source_index, target_indices in enumerate(alignment):
@@ -440,8 +471,8 @@ if __name__ == "__main__":
                              "There are several dimensions: lemma vs surface form (lemma/surf)," +
                              "factored or non-factored (fac/nonfac), interleaved vs suffixed (int/suf)," +
                              "append/replace/mask+append. See WMT21 terminology task papers for details." +
-                             "Currently the approach used is lemma-nonfac-int-append, since it seems" +
-                             "to have worked best in WMT21 (and is simple).")
+                             "Currently the approach used is lemma-nonfac-int-replace, since it seems" +
+                             "simplest.")
     parser.add_argument("--term_start_tag", type=str, default="<term_start>",
                         help="Tag that is inserted before the source term")
     parser.add_argument("--term_end_tag", type=str, default="<term_end>",
@@ -533,6 +564,8 @@ if __name__ == "__main__":
         for source_line_sp in orig_source:
             sent_count += 1
             target_line_sp = target.readline()
+
+            #parse line word alignment
             current_line_alignment = orig_alignments.readline()
             current_alignment_dict = {}
             for token_alignment in current_line_alignment.split():
@@ -542,6 +575,7 @@ if __name__ == "__main__":
                 else:
                     current_alignment_dict[source_index] = [target_index]
 
+            #check if an annotation of the line exists already in the annotation file
             existing_term_annotation = existing_term_annotations.readline()
 
             #if there are pre-saved term annotations, use them
@@ -605,4 +639,3 @@ if __name__ == "__main__":
     os.remove(new_term_annotations_path)
     sys.stderr.write(f"Sentences processed {sent_count}, term sentences generated {sents_with_terms_count}\n")
 
-    #print([f"{x[0]+1}: {x[1]}" for x in enumerate(term_buckets)])
