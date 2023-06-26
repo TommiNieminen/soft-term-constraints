@@ -58,3 +58,18 @@ Script help (note that some arguments have not yet been implemented):
   --max_sents MAX_SENTS
                         Max amount of sentences with terms to generate. If not defined, generate all.
 ```
+# Running on CSC's LUMI supercomputer
+
+Stanza uses pytorch, which supports AMD's GPUs. However, you have to install a specific version of pytorch to make it work.
+
+It is best to set up a virtual environment before installing pytorch with pip:
+
+``` module load cray-python; python -m venv stanza_env ```
+
+The pytorch website has a selection functionality for finding out the correct install command to use on a given platform. At the time of writing, the pytorch installation command to use on LUMI is the following:
+
+``` pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm5.4.2 ```
+
+Install stanza only after installing pytorch with the above command (otherwise pip will install NVIDIA pytorch):
+
+``` pip install stanza ```
