@@ -637,11 +637,14 @@ if __name__ == "__main__":
         for source_line in orig_source:
             sent_count += 1
             target_line = target.readline()
+
             #parse line word alignment
             current_line_alignment = orig_alignments.readline().strip()
 
             #if enough sentences have been annotated, just output the original lines
-            if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
+            #(also skip very long lines, since stanza will fail with those)
+            if (int_max_sents != -1 and sents_with_terms_count >= int_max_sents) \
+                or len(source_line) > 2000 or len(target_line) > 2000:
                 if args.omit_unannotated:
                     break
                 else:
