@@ -469,7 +469,7 @@ def process_parallel_sentence(
             term_pairs = [{args.source_lang: " ".join(x[4]),args.target_lang: " ".join(x[5])} for x in aligned_chunks]
             json.dump(term_pairs,jsonl_terms,ensure_ascii=False)
             jsonl_terms.write("\n")
-
+        
         #this is for cases where you just want the annotations, but don't want to apply them to the source
         if not do_not_augment:
             output_source.write(simple_sp_decode(term_source) + "\n")
