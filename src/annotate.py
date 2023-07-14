@@ -70,9 +70,9 @@ if __name__ == "__main__":
                 termindex=0
                 for line_term in line_terms:
                     if args.source_lang in ["zh"]:
-                        line = re.sub(f"{line_term[args.source_lang].replace(" ","")}",f"TERM_MATCH_{termindex}",line)
+                        line = re.sub(f'{line_term[args.source_lang].replace(" ","")}',f'TERM_MATCH_{termindex}',line)
                     else:
-                        line = re.sub(f"\\b{line_term[args.source_lang]}\\b",f"TERM_MATCH_{termindex}",line)
+                        line = re.sub(f"\\b{line_term[args.source_lang]}\\b",f'TERM_MATCH_{termindex}',line)
                     termindex += 1
                 #Replace term match placeholders with the term annotation
                 termindex=0
