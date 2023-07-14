@@ -64,7 +64,7 @@ Stanza uses pytorch, which supports AMD's GPUs. However, you have to install a s
 
 It is best to set up a virtual environment before installing pytorch with pip:
 
-``` module load cray-python; python -m venv stanza_env ```
+``` module load cray-python; python -m venv stanza_env; source stanza_env/bin/activate ```
 
 The pytorch website has a selection functionality for finding out the correct install command to use on a given platform. At the time of writing, the pytorch installation command to use on LUMI is the following:
 
