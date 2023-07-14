@@ -3,6 +3,8 @@ import json
 import os.path
 import re
 import sys
+import ast
+import gzip
 #import sentencepiece as spm
 import random
 from datetime import datetime
@@ -49,27 +51,35 @@ if __name__ == "__main__":
 
     with \
         open(args.source_file,'rt', encoding="utf8") as orig_source,\
-        open(args.terms_per_sentence,'rt') as terms,\
         open(args.source_output_path,'wt', encoding="utf8") as output_source:
 
-        for line in orig_source:
-            term_line = terms.readline()
-            if not term_line or term_line.isspace():
-                output_source.write(line)
-                continue
-            line_terms = json.loads(term_line)
-            
-            #First mark matches for all terms
-            termindex=0
-            for line_term in line_terms:
-                line = re.sub(f"\\b{line_term[args.source_lang]}\\b",f"TERM_MATCH_{termindex}",line)
-                termindex += 1
-            #Replace term match placeholders with the term annotation
-            termindex=0
-            for line_term in line_terms:
-                line = re.sub(f" ?TERM_MATCH_{termindex}",f"{args.term_start_tag} {line_term[args.source_lang]}{args.term_end_tag} {line_term[args.target_lang]}{args.trans_end_tag}", line)
-                termindex += 1
+        jsonl_terms = args.terms_per_sentence.endswith(".jsonl")
+        #wmt23 term format is jsonl, while soft-constraint script stores terms as python object strings
+        with open(args.terms_per_sentence,'rt') if jsonl_terms else gzip.open(args.terms_per_sentence,'r') as terms:
+            for line in orig_source:
+                term_line = terms.readline()
+                if not term_line or term_line.isspace():
+                    output_source.write(line)
+                    continue
+                if jsonl_terms:
+                    line_terms = json.loads(term_line)
+                else:
+                    line_terms = [{args.source_lang: " ".join(x[4]),args.target_lang: " ".join(x[5])} for x in ast.literal_eval(term_line)]
+                
+                #First mark matches for all terms
+                termindex=0
+                for line_term in line_terms:
+                    if args.source_lang in ["zh"]:
+                        line = re.sub(f'{line_term[args.source_lang].replace(" ","")}',f'TERM_MATCH_{termindex}',line)
+                    else:
+                        line = re.sub(f"\\b{line_term[args.source_lang]}\\b",f'TERM_MATCH_{termindex}',line)
+                    termindex += 1
+                #Replace term match placeholders with the term annotation
+                termindex=0
+                for line_term in line_terms:
+                    line = re.sub(f" ?TERM_MATCH_{termindex}",f"{args.term_start_tag} {line_term[args.source_lang]}{args.term_end_tag} {line_term[args.target_lang]}{args.trans_end_tag}", line)
+                    termindex += 1
 
-            output_source.write(line)            
-            #print(source_sp_model.encode(line,out_type=str))
+                output_source.write(line)            
+                #print(source_sp_model.encode(line,out_type=str))
 

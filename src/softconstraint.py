@@ -7,6 +7,8 @@ import gzip
 import stanza
 import sentencepiece as spm
 import random
+import json
+from contextlib import nullcontext
 from datetime import datetime
 from stanza import DownloadMethod
 
@@ -452,20 +454,29 @@ def simple_sp_decode(sp_line):
 def process_parallel_sentence(
         aligned_chunks, term_buckets, source_line_sp, target_line_sp,
         alignment_dict, orig_alignment_string, output_source, output_target, output_alignments,
-        omit_unannotated, keep_original, new_term_annotations=None):
+        omit_unannotated, keep_original, args, do_not_augment, new_term_annotations=None, jsonl_terms=None):
 
 
     if aligned_chunks:
         if new_term_annotations:
-            new_term_annotations.write(str(aligned_chunks)+'\n') 
+            new_term_annotations.write(str(aligned_chunks)+'\n')
+        #TODO: same sentences could be annotated with different chunk selections, would be 
+        #especially useful for evalsets to increase variety 
         (aligned_chunks, term_buckets) = filter_chunks(aligned_chunks, term_buckets)
         (term_source, term_target, term_alignment) = annotate(
             args, source_line_sp, target_line_sp, aligned_chunks, target_sp_model, alignment_dict)
-        output_source.write(simple_sp_decode(term_source) + "\n")
-        output_target.write(simple_sp_decode(term_target) + "\n")
-        output_alignments.write(term_alignment + "\n")
+        if jsonl_terms:
+            term_pairs = [{args.source_lang: " ".join(x[4]),args.target_lang: " ".join(x[5])} for x in aligned_chunks]
+            json.dump(term_pairs,jsonl_terms,ensure_ascii=False)
+            jsonl_terms.write("\n")
+
+        #this is for cases where you just want the annotations, but don't want to apply them to the source
+        if not do_not_augment:
+            output_source.write(simple_sp_decode(term_source) + "\n")
+            output_target.write(simple_sp_decode(term_target) + "\n")
+            output_alignments.write(term_alignment + "\n")
         
-        if keep_original:
+        if keep_original or do_not_augment:
             output_source.write(simple_sp_decode(source_line_sp) + "\n")
             output_target.write(simple_sp_decode(target_line_sp) + "\n")
             output_alignments.write(orig_alignment_string + "\n")
@@ -494,6 +505,8 @@ if __name__ == "__main__":
                         help="Is the input sentence piece segmented.")
     parser.add_argument("--omit_unannotated", default=False, action='store_true',
                         help="Include unannotated sentence pairs in output.")
+    parser.add_argument("--do_not_augment", default=False, action='store_true',
+                        help="Do not augment data, used in cases where you only want the annotations.")
     parser.add_argument("--source_corpus", type=str,
                         help="Corpus containing the source sentences.")
     parser.add_argument("--source_output_path", type=str,
@@ -510,6 +523,8 @@ if __name__ == "__main__":
                         help="File containing the alignments between the source and target corpora.")
     parser.add_argument("--alignment_output_path", type=str,
                         help="Path where the annotated source and target alignment will be stored.")
+    parser.add_argument("--term_jsonl_output_path", type=str,
+                        help="Path where the jsonl term info is stored.")
     parser.add_argument("--source_spm", type=str,
                         help="Source sentencepiece model.")
     parser.add_argument("--target_spm", type=str,
@@ -521,7 +536,7 @@ if __name__ == "__main__":
                         help="(NOT IMPLEMENTED YET) If this is defined, the corpus in annotated using" +
                              "a termbase, if not defined (the current system), aligned noun phrases and verbs" +
                              "are used as term proxies.")
-    parser.add_argument("--annotation_method", type=str,
+    parser.add_argument("--annotation_method", type=str, default="lemma-nonfac-int-replace",
                         help="Method to use when annotating target terms to source text." +
                              "There are several dimensions: lemma vs surface form (lemma/surf)," +
                              "factored or non-factored (fac/nonfac), interleaved vs suffixed (int/suf)," +
@@ -544,7 +559,7 @@ if __name__ == "__main__":
                         "sentence to make it conform with count")
     parser.add_argument("--max_terms_per_sent", type=int, default=10,
                         help="Max amount of terms to annotate per sentence.")
-    parser.add_argument("--sents_per_term_sent", type=int, default=10,
+    parser.add_argument("--sents_per_term_sent", type=int,
                         help="The ratio of unannotated sentences to annotated sentences." +
                         "With the default 10, there will be 10 unannotated sentences per annptated sentence.")
     parser.add_argument("--batch_size", type=int, default=500,
@@ -553,7 +568,11 @@ if __name__ == "__main__":
                         help="Max amount of sentences with terms to generate. If not defined, generate all. " +
                         "k can be used for 1000s and M for millions")
 
+
     args = parser.parse_args()
+
+    do_not_augment = args.do_not_augment
+
 
     if args.max_sents:
         if args.max_sents.isnumeric():
@@ -567,7 +586,7 @@ if __name__ == "__main__":
     else:
         int_max_sents = -1
 
-    if args.sents_per_term_sent:
+    if not args.max_sents and args.sents_per_term_sent:
         #get the amount of lines in the corpus
         with gzip.open(args.alignment_file, 'rb') as f:
             for i, l in enumerate(f):
@@ -623,7 +642,8 @@ if __name__ == "__main__":
         gzip.open(output_target_path,'wt', encoding="utf8") as output_target,\
         gzip.open(output_alignments_path,'wt', encoding="utf8") as output_alignments,\
         gzip.open(existing_term_annotations_path,'rt', encoding="utf8") as existing_term_annotations, \
-        open(new_term_annotations_path, 'wt', encoding="utf8") as new_term_annotations:
+        open(new_term_annotations_path, 'wt', encoding="utf8") as new_term_annotations, \
+        open(args.term_jsonl_output_path, 'wt', encoding="utf8") if args.term_jsonl_output_path else nullcontext() as jsonl_terms:
 
         sent_count = 0
         batch_counter = 0
@@ -637,11 +657,18 @@ if __name__ == "__main__":
         for source_line in orig_source:
             sent_count += 1
             target_line = target.readline()
+
             #parse line word alignment
             current_line_alignment = orig_alignments.readline().strip()
-
+ 
             #if enough sentences have been annotated, just output the original lines
-            if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
+            #(also skip long lines that break Stanza)
+            #NOTE/FUTURE TODO: this bit of code is a bit broken, but since I've generated annotations
+            #with it, I'm not fixing it now. The main problem is coupling the length and
+            #max sent conditions, which should be separate. This will cause the annotation
+            #file to go out of sync with the orig files, if there are long sentences.
+            if (int_max_sents != -1 and sents_with_terms_count >= int_max_sents) \
+                or len(source_line) > 2000 or len(target_line) > 2000:
                 if args.omit_unannotated:
                     break
                 else:
@@ -652,7 +679,7 @@ if __name__ == "__main__":
                         output_source.write(source_line)
                         output_target.write(target_line)
                     output_alignments.write(current_line_alignment + "\n")
-                    continue
+                    continue 
 
             if not args.sp_input:
                 source_line_sp = " ".join(source_sp_model.encode(source_line,out_type=str))
@@ -679,7 +706,7 @@ if __name__ == "__main__":
                 sents_with_terms_count += process_parallel_sentence(
                         aligned_chunks,term_buckets,source_line_sp,target_line_sp,current_alignment_dict,current_line_alignment,
                         output_source, output_target, output_alignments, args.omit_unannotated,
-                        keep_original)
+                        keep_original, args, do_not_augment, jsonl_terms=jsonl_terms)
                 if int_max_sents != -1and sents_with_terms_count >= int_max_sents:
                     continue
             else:
@@ -692,14 +719,16 @@ if __name__ == "__main__":
                     if len(batch_aligned_chunks) != len(batch):
                         sys.stderr.write(f"Batch and result counts do not match, skipping batch.")
                         batch = []
-                    #sents_with_terms_count += len(sents_with_terms)
-                    for ((source_line_sp,target_line_sp,line_alignment,orig_alignment_string),aligned_chunks) in batch_aligned_chunks:
-                        sents_with_terms_count += process_parallel_sentence(
-                            aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment,orig_alignment_string,
-                            output_source, output_target, output_alignments, args.omit_unannotated,
-                            keep_original, new_term_annotations)
-                        if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
-                            break
+                        continue
+                    else:
+                        #sents_with_terms_count += len(sents_with_terms)
+                        for ((source_line_sp,target_line_sp,line_alignment,orig_alignment_string),aligned_chunks) in batch_aligned_chunks:
+                            sents_with_terms_count += process_parallel_sentence(
+                                aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment,orig_alignment_string,
+                                output_source, output_target, output_alignments, args.omit_unannotated,
+                                keep_original, args, do_not_augment, new_term_annotations, jsonl_terms=jsonl_terms)
+                            if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
+                                break
                     batch = []
                     if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
                         continue
@@ -713,13 +742,18 @@ if __name__ == "__main__":
         #handle possible unfinished batch (should not fire usually, since batch will be empty
         # when max sents is reached, only occurs if whole corpus is analyzed)
         if batch and not (int_max_sents != -1 and sents_with_terms_count >= int_max_sents):
-            for ((source_line_sp, target_line_sp, line_alignment, orig_alignment_string), aligned_chunks) in batch_aligned_chunks:
-                sents_with_terms_count += process_parallel_sentence(
-                    aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment,orig_alignment_string,
-                    output_source, output_target, output_alignments, args.omit_unannotated,
-                    keep_original, new_term_annotations)
-                if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
-                    continue
+            batch_aligned_chunks = process_batch(batch,source_stanza_nlp,target_stanza_nlp)
+            if len(batch_aligned_chunks) != len(batch):
+                sys.stderr.write(f"Batch and result counts do not match, skipping batch.")
+                batch = []
+            else:
+                for ((source_line_sp, target_line_sp, line_alignment, orig_alignment_string), aligned_chunks) in batch_aligned_chunks:
+                    sents_with_terms_count += process_parallel_sentence(
+                        aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment,orig_alignment_string,
+                        output_source, output_target, output_alignments, args.omit_unannotated,
+                        keep_original, args, do_not_augment, new_term_annotations, jsonl_terms=jsonl_terms)
+                    if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
+                        continue
 
 
     with gzip.open(existing_term_annotations_path,'at', encoding="utf8") as existing_term_annotations, \
