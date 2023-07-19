@@ -62,7 +62,7 @@ if __name__ == "__main__":
                     output_source.write(line)
                     continue
                 if jsonl_terms:
-                    line_terms = json.loads(term_line)
+                    line_terms = [x for x in json.loads(term_line) if x[args.source_lang] and x[args.target_lang]]
                 else:
                     line_terms = [{args.source_lang: " ".join(x[4]),args.target_lang: " ".join(x[5])} for x in ast.literal_eval(term_line)]
                 
@@ -70,14 +70,19 @@ if __name__ == "__main__":
                 termindex=0
                 for line_term in line_terms:
                     if args.source_lang in ["zh"]:
-                        line = re.sub(f'{line_term[args.source_lang].replace(" ","")}',f'TERM_MATCH_{termindex}',line)
+                        term_without_spaces = line_term[args.source_lang].replace(" ","")
+                        line = re.sub(rf'{re.escape(term_without_spaces)}',f'TERM_MATCH_{termindex}',line)
                     else:
-                        line = re.sub(f"\\b{line_term[args.source_lang]}\\b",f'TERM_MATCH_{termindex}',line)
+                        line = re.sub(rf"\b{re.escape(line_term[args.source_lang])}\b",f'TERM_MATCH_{termindex}',line)
                     termindex += 1
                 #Replace term match placeholders with the term annotation
                 termindex=0
                 for line_term in line_terms:
-                    line = re.sub(f" ?TERM_MATCH_{termindex}",f"{args.term_start_tag} {line_term[args.source_lang]}{args.term_end_tag} {line_term[args.target_lang]}{args.trans_end_tag}", line)
+                    if "append" in args.annotation_method:
+                        line = re.sub(f" ?TERM_MATCH_{termindex}",f"{args.term_start_tag} {line_term[args.source_lang]}{args.term_end_tag} {line_term[args.target_lang]}{args.trans_end_tag}", line)
+                    elif "replace" in args.annotation_method:
+                        line = re.sub(f" ?TERM_MATCH_{termindex}",f"{args.term_start_tag} {line_term[args.target_lang]}{args.term_end_tag}", line)
+
                     termindex += 1
 
                 output_source.write(line)            
