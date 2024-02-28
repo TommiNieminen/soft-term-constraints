@@ -470,24 +470,37 @@ def process_parallel_sentence(
             json.dump(term_pairs,jsonl_terms,ensure_ascii=False)
             jsonl_terms.write("\n")
         
-        #this is for cases where you just want the annotations, but don't want to apply them to the source
+        #do_not_augment is for cases where you just want the annotations, but don't want to apply them to the source
         if not do_not_augment:
-            output_source.write(simple_sp_decode(term_source) + "\n")
-            output_target.write(simple_sp_decode(term_target) + "\n")
+            if args.sp_output:
+                output_source.write(term_source.strip() + "\n")
+                output_target.write(term_target.strip() + "\n")
+            else:
+                output_source.write(simple_sp_decode(term_source) + "\n")
+                output_target.write(simple_sp_decode(term_target) + "\n")
             output_alignments.write(term_alignment + "\n")
         
         if keep_original or do_not_augment:
-            output_source.write(simple_sp_decode(source_line_sp) + "\n")
-            output_target.write(simple_sp_decode(target_line_sp) + "\n")
+            if args.sp_output:
+                output_source.write(source_line_sp.strip() + "\n")
+                output_target.write(target_line_sp.strip() + "\n")
+            else:
+                output_source.write(simple_sp_decode(source_line_sp) + "\n")
+                output_target.write(simple_sp_decode(target_line_sp) + "\n")
             output_alignments.write(orig_alignment_string + "\n")
         return 1
     else:
         if new_term_annotations:
             new_term_annotations.write("[]\n")
         if not omit_unannotated:
-            output_source.write(simple_sp_decode(source_line_sp) + "\n")
-            output_target.write(simple_sp_decode(target_line_sp) + "\n")
+            if args.sp_output:
+                output_source.write(source_line_sp.strip() + "\n")
+                output_target.write(target_line_sp.strip() + "\n")
+            else:
+                output_source.write(simple_sp_decode(source_line_sp) + "\n")
+                output_target.write(simple_sp_decode(target_line_sp) + "\n")
             output_alignments.write(orig_alignment_string + "\n")
+
         return 0
 
  
@@ -503,6 +516,8 @@ if __name__ == "__main__":
                     "The corpora are expected to be segmented with sentencepiece.")
     parser.add_argument("--sp_input", default=False, action='store_true',
                         help="Is the input sentence piece segmented.")
+    parser.add_argument("--sp_output", default=False, action='store_true',
+                        help="Should the output be sentence piece segmented?")
     parser.add_argument("--omit_unannotated", default=False, action='store_true',
                         help="Include unannotated sentence pairs in output.")
     parser.add_argument("--do_not_augment", default=False, action='store_true',
@@ -672,7 +687,7 @@ if __name__ == "__main__":
                 if args.omit_unannotated:
                     break
                 else:
-                    if args.sp_input:
+                    if args.sp_input and not args.sp_output:
                         output_source.write(simple_sp_decode(source_line) + "\n")
                         output_target.write(simple_sp_decode(target_line) + "\n")
                     else:
@@ -707,7 +722,7 @@ if __name__ == "__main__":
                         aligned_chunks,term_buckets,source_line_sp,target_line_sp,current_alignment_dict,current_line_alignment,
                         output_source, output_target, output_alignments, args.omit_unannotated,
                         keep_original, args, do_not_augment, jsonl_terms=jsonl_terms)
-                if int_max_sents != -1and sents_with_terms_count >= int_max_sents:
+                if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
                     continue
             else:
                 #start batching for stanza
