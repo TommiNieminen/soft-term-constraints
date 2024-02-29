@@ -11,6 +11,7 @@ import json
 from contextlib import nullcontext
 from datetime import datetime
 from stanza import DownloadMethod
+from sgm_generator import generate_sgm
 
 class JoinedToken:
     def __init__(self,token,sp_indices):
@@ -454,7 +455,7 @@ def simple_sp_decode(sp_line):
 def process_parallel_sentence(
         aligned_chunks, term_buckets, source_line_sp, target_line_sp,
         alignment_dict, orig_alignment_string, output_source, output_target, output_alignments,
-        omit_unannotated, keep_original, args, do_not_augment, new_term_annotations=None, jsonl_terms=None):
+        omit_unannotated, keep_original, args, do_not_augment, new_term_annotations=None, jsonl_terms=None, sgm_terms=None):
 
 
     if aligned_chunks:
@@ -469,6 +470,8 @@ def process_parallel_sentence(
             term_pairs = [{args.source_lang: " ".join(x[4]),args.target_lang: " ".join(x[5])} for x in aligned_chunks]
             json.dump(term_pairs,jsonl_terms,ensure_ascii=False)
             jsonl_terms.write("\n")
+        if sgm_terms:
+            sgm_terms.write(str(aligned_chunks)+'\n')
         
         #do_not_augment is for cases where you just want the annotations, but don't want to apply them to the source
         if not do_not_augment:
@@ -526,10 +529,14 @@ if __name__ == "__main__":
                         help="Corpus containing the source sentences.")
     parser.add_argument("--source_output_path", type=str,
                         help="Path where the annotated source will be stored.")
+    parser.add_argument("--source_sgm_path", type=str,
+                        help="Path where the annotated source sgm file (for terminology evaluation) will be stored.")
     parser.add_argument("--target_corpus", type=str,
                         help="Corpus containing the target sentences.")
     parser.add_argument("--target_output_path", type=str,
                         help="Path where the annotated target will be stored.")
+    parser.add_argument("--target_sgm_path", type=str,
+                        help="Path where the annotated target sgm file (for terminology evaluation) will be stored.")
     parser.add_argument("--source_lang", type=str,
                         help="Source language for lemmatization.")
     parser.add_argument("--target_lang", type=str,
@@ -587,7 +594,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     do_not_augment = args.do_not_augment
-
 
     if args.max_sents:
         if args.max_sents.isnumeric():
@@ -648,6 +654,7 @@ if __name__ == "__main__":
 
     source_sp_model = spm.SentencePieceProcessor(args.source_spm)
     target_sp_model = spm.SentencePieceProcessor(args.target_spm)
+    
 
     with \
         gzip.open(args.source_corpus,'rt', encoding="utf8") as orig_source,\
@@ -658,7 +665,8 @@ if __name__ == "__main__":
         gzip.open(output_alignments_path,'wt', encoding="utf8") as output_alignments,\
         gzip.open(existing_term_annotations_path,'rt', encoding="utf8") as existing_term_annotations, \
         open(new_term_annotations_path, 'wt', encoding="utf8") as new_term_annotations, \
-        open(args.term_jsonl_output_path, 'wt', encoding="utf8") if args.term_jsonl_output_path else nullcontext() as jsonl_terms:
+        open(args.term_jsonl_output_path, 'wt', encoding="utf8") if args.term_jsonl_output_path else nullcontext() as jsonl_terms, \
+        open(args.source_sgm_path + ".terms", 'wt', encoding="utf8") if args.source_sgm_path else nullcontext() as sgm_terms:
 
         sent_count = 0
         batch_counter = 0
@@ -721,7 +729,7 @@ if __name__ == "__main__":
                 sents_with_terms_count += process_parallel_sentence(
                         aligned_chunks,term_buckets,source_line_sp,target_line_sp,current_alignment_dict,current_line_alignment,
                         output_source, output_target, output_alignments, args.omit_unannotated,
-                        keep_original, args, do_not_augment, jsonl_terms=jsonl_terms)
+                        keep_original, args, do_not_augment, jsonl_terms=jsonl_terms, sgm_terms=sgm_terms)
                 if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
                     continue
             else:
@@ -741,7 +749,7 @@ if __name__ == "__main__":
                             sents_with_terms_count += process_parallel_sentence(
                                 aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment,orig_alignment_string,
                                 output_source, output_target, output_alignments, args.omit_unannotated,
-                                keep_original, args, do_not_augment, new_term_annotations, jsonl_terms=jsonl_terms)
+                                keep_original, args, do_not_augment, new_term_annotations, jsonl_terms=jsonl_terms, sgm_terms=sgm_terms)
                             if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
                                 break
                     batch = []
@@ -766,7 +774,7 @@ if __name__ == "__main__":
                     sents_with_terms_count += process_parallel_sentence(
                         aligned_chunks,term_buckets,source_line_sp,target_line_sp,line_alignment,orig_alignment_string,
                         output_source, output_target, output_alignments, args.omit_unannotated,
-                        keep_original, args, do_not_augment, new_term_annotations, jsonl_terms=jsonl_terms)
+                        keep_original, args, do_not_augment, new_term_annotations, jsonl_terms=jsonl_terms, sgm_terms=sgm_terms)
                     if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
                         continue
 
@@ -779,3 +787,6 @@ if __name__ == "__main__":
     os.remove(new_term_annotations_path)
     sys.stderr.write(f"Sentences processed {sent_count}, term sentences generated {sents_with_terms_count}\n")
 
+    #generate sgm files to be used with the terminologyevaluation tool (https://github.com/mahfuzibnalam/terminology_evaluation)
+    if args.source_sgm_path and args.target_sgm_path:
+        sgm_generator.generate_sgm(args.source_corpus, args.target_corpus, args.source_sgm_path+".terms", args.source_lang, args.target_lang, "evalsets", args.source_sgm_path, args.target_sgm_path)
