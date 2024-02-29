@@ -1,6 +1,10 @@
 import argparse
 import ast
 
+def simple_sp_decode(sp_line):
+    return sp_line.replace(' ','').replace('▁',' ').strip()
+
+
 def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_code, target_lang_code, set_id, output_src_path, output_trg_path):
     with \
         open(input_src_path, 'r', encoding='utf-8') as input_src_file, \
@@ -30,8 +34,8 @@ def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_c
             src_words = src_line.split()
             trg_words = trg_line.split()
 
-            output_src_file.write('<seg id="{}"> '.format(seg_id))
-            output_trg_file.write('<seg id="{}"> '.format(seg_id))
+            output_src_file.write('<seg id="{}">'.format(seg_id))
+            output_trg_file.write('<seg id="{}">'.format(seg_id))
 
             src_term_insertions = {}
             trg_term_insertions = {}
@@ -39,7 +43,7 @@ def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_c
             for (target_indices, source_lemmas, target_lemmas, source_indices, source_surfs, target_surfs) in terms:
                 src = " ".join(source_lemmas)
                 trg = " ".join(target_lemmas)
-                term_tag = f'<term id="{term_id}" type="src_original_and_tgt_original" src="{src}" tgt="{trg}">'
+                term_tag = f' <term id="{term_id}" type="src_original_and_tgt_original" src="{src}" tgt="{trg}">'
                 src_start_pos = sorted(source_indices)[0]
                 src_end_pos = sorted(source_indices)[-1]+1
                 trg_start_pos = sorted(target_indices)[0]
@@ -59,16 +63,18 @@ def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_c
                 insert_term(trg_start_pos, trg_end_pos, term_tag, trg_term_insertions)
 
                 term_id += 1
-
-            print(terms)
             for pos in reversed(sorted(src_term_insertions.keys())):
                 src_words.insert(pos, src_term_insertions[pos])
+                if src_term_insertions[pos] != "</term>":
+                    src_words[pos+1] = src_words[pos+1].replace('▁','')
             for pos in reversed(sorted(trg_term_insertions.keys())):
-                print(pos)
                 trg_words.insert(pos, trg_term_insertions[pos])
+                if trg_term_insertions[pos] != "</term>":
+                    trg_words[pos+1] = trg_words[pos+1].replace('▁','')
+ 
 
-            output_src_file.write(" ".join(src_words))
-            output_trg_file.write(" ".join(trg_words))
+            output_src_file.write("".join(src_words).replace('▁',' ').strip())
+            output_trg_file.write("".join(trg_words).replace('▁',' ').strip())
             output_src_file.write('</seg>\n')
             output_trg_file.write('</seg>\n')
             seg_id += 1
