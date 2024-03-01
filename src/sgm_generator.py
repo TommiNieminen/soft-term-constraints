@@ -1,14 +1,21 @@
 import argparse
 import ast
+import gzip
 
 def simple_sp_decode(sp_line):
     return sp_line.replace(' ','').replace('▁',' ').strip()
 
+def agnostic_open(path):
+    if path.endswith(".gz"):
+        return gzip.open(path, 'rt', encoding='utf-8')
+    else:
+        return open(path, 'r', encoding='utf-8')
 
 def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_code, target_lang_code, set_id, output_src_path, output_trg_path):
+
     with \
-        open(input_src_path, 'r', encoding='utf-8') as input_src_file, \
-        open(input_trg_path, 'r', encoding='utf-8') as input_trg_file, \
+        agnostic_open(input_src_path) as input_src_file, \
+        agnostic_open(input_trg_path) as input_trg_file, \
         open(terminology_path, 'r', encoding='utf-8') as term_file, \
         open(output_src_path, 'w', encoding='utf-8') as output_src_file, \
         open(output_trg_path, 'w', encoding='utf-8') as output_trg_file:
@@ -17,10 +24,10 @@ def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_c
         output_trg_file.write(f'<refset setid="{set_id}" srclang="{source_lang_code} trglang="{target_lang_code}">\n')
         
         output_src_file.write(f'<doc sysid="ref" docid="evalset" genre="terminology" origlang="{source_lang_code}">\n')
-        output_src_file.write('<p>\n')
+        output_trg_file.write('<p>\n')
 
         output_src_file.write(f'<doc sysid="ref" docid="evalset" genre="terminology" origlang="{source_lang_code}">\n')
-        output_src_file.write('<p>\n')
+        output_trg_file.write('<p>\n')
 
         seg_id = 0
         term_id = 0
@@ -64,13 +71,15 @@ def generate_sgm(input_src_path, input_trg_path, terminology_path, source_lang_c
 
                 term_id += 1
             for pos in reversed(sorted(src_term_insertions.keys())):
-                src_words.insert(pos, src_term_insertions[pos])
+                src_words.insert(pos, src_term_insertions[pos]) 
                 if src_term_insertions[pos] != "</term>":
-                    src_words[pos+1] = src_words[pos+1].replace('▁','')
+                    if len(src_words) > pos+1:
+                        src_words[pos+1] = src_words[pos+1].replace('▁','')
             for pos in reversed(sorted(trg_term_insertions.keys())):
                 trg_words.insert(pos, trg_term_insertions[pos])
                 if trg_term_insertions[pos] != "</term>":
-                    trg_words[pos+1] = trg_words[pos+1].replace('▁','')
+                    if len(trg_words) > pos+1:
+                        trg_words[pos+1] = trg_words[pos+1].replace('▁','')
  
 
             output_src_file.write("".join(src_words).replace('▁',' ').strip())

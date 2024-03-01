@@ -504,6 +504,9 @@ def process_parallel_sentence(
                 output_target.write(simple_sp_decode(target_line_sp) + "\n")
             output_alignments.write(orig_alignment_string + "\n")
 
+        if sgm_terms:
+            sgm_terms.write('\n')
+
         return 0
 
  
@@ -789,4 +792,5 @@ if __name__ == "__main__":
 
     #generate sgm files to be used with the terminologyevaluation tool (https://github.com/mahfuzibnalam/terminology_evaluation)
     if args.source_sgm_path and args.target_sgm_path:
-        sgm_generator.generate_sgm(args.source_corpus, args.target_corpus, args.source_sgm_path+".terms", args.source_lang, args.target_lang, "evalsets", args.source_sgm_path, args.target_sgm_path)
+        sys.stderr.write(f"Generating sgm with arguments {args.source_corpus}, {args.target_corpus}, {args.source_sgm_path+'.terms'}, {args.source_lang}, {args.target_lang}, evalsets, {args.source_sgm_path}, {args.target_sgm_path}\n")
+        generate_sgm(args.source_corpus, args.target_corpus, args.source_sgm_path+".terms", args.source_lang, args.target_lang, "evalsets", args.source_sgm_path, args.target_sgm_path)
