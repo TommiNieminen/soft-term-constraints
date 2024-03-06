@@ -561,13 +561,13 @@ if __name__ == "__main__":
                         help="(NOT IMPLEMENTED YET) If this is defined, the corpus in annotated using" +
                              "a termbase, if not defined (the current system), aligned noun phrases and verbs" +
                              "are used as term proxies.")
-    parser.add_argument("--annotation_method", type=str, default="lemma-nonfac-int-replace",
+    parser.add_argument("--annotation_method", type=str, default="lemma-nonfac-int-append",
                         help="Method to use when annotating target terms to source text." +
                              "There are several dimensions: lemma vs surface form (lemma/surf)," +
                              "factored or non-factored (fac/nonfac), interleaved vs suffixed (int/suf)," +
                              "append/replace/mask+append. See WMT21 terminology task papers for details." +
-                             "Currently the approach used is lemma-nonfac-int-replace, since it seems" +
-                             "simplest.")
+                             "Currently the approach used is lemma-nonfac-int-append, since it seems" +
+                             "most sensible.")
     parser.add_argument("--term_start_tag", type=str, default="<term_start>",
                         help="Tag that is inserted before the source term")
     parser.add_argument("--term_end_tag", type=str, default="<term_end>",
