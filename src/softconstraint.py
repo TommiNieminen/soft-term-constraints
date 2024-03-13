@@ -183,18 +183,26 @@ def sp_to_sent(sp_line):
     joined_tokens = join_sp_tokens(sp_tokens)
     sentence = " ".join(["".join(v.token) for k, v in joined_tokens.items()])
     return sentence
-
+ 
 def get_next_stanza_sent(stanza_batch):
-    stanza_sent = stanza_batch.pop(0)
+    # the batch can be empty for some reason, not sure why
+    if stanza_batch:
+        stanza_sent = stanza_batch.pop(0)
+    else:
+        return None
+    # return sent if next batch line is either sentencebreak or batch end
     if not stanza_batch or stanza_batch[0].text == "SENTENCEBREAK":
+        # pop SENTENCEBREAK from the top of the batch
         if stanza_batch:
             stanza_batch.pop(0)
         return stanza_sent
     else:
+        # if we get here, there are multiple sentences in the batch between sentencebreaks
+        # pop all of those sentences out and return None
         while stanza_batch and stanza_batch[0].text != "SENTENCEBREAK":
             stanza_batch.pop(0)
         if stanza_batch:
-            #remove SENTENCEBREAK
+            # pop SENTENCEBREAK from the top of the batch
             stanza_batch.pop(0)
         return None
 
@@ -221,12 +229,14 @@ def process_batch(batch,source_stanza_nlp,target_stanza_nlp):
         # print(joined_target_tokens)
         source_sentence = " ".join(["".join(v.token) for k, v in joined_source_tokens.items()])
         target_sentence = " ".join(["".join(v.token) for k, v in joined_target_tokens.items()])
-        
         source_stanza_sent = get_next_stanza_sent(source_stanza_batch)
         target_stanza_sent = get_next_stanza_sent(target_stanza_batch)
 
         #This occurs if there are multiple sentences on the line according to Stanza, skip those
         if not source_stanza_sent or not target_stanza_sent:
+            batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment, orig_alignment_string),[]))
+            continue
+        if source_stanza_sent.text == "OVERLONG_SENTENCE":
             batch_aligned_chunks.append(((source_line_sp,target_line_sp,line_alignment, orig_alignment_string),[]))
             continue
 
@@ -688,13 +698,7 @@ if __name__ == "__main__":
             current_line_alignment = orig_alignments.readline().strip()
  
             #if enough sentences have been annotated, just output the original lines
-            #(also skip long lines that break Stanza)
-            #NOTE/FUTURE TODO: this bit of code is a bit broken, but since I've generated annotations
-            #with it, I'm not fixing it now. The main problem is coupling the length and
-            #max sent conditions, which should be separate. This will cause the annotation
-            #file to go out of sync with the orig files, if there are long sentences.
-            if (int_max_sents != -1 and sents_with_terms_count >= int_max_sents) \
-                or len(source_line) > 2000 or len(target_line) > 2000:
+            if (int_max_sents != -1 and sents_with_terms_count >= int_max_sents):
                 if args.omit_unannotated:
                     break
                 else:
@@ -707,20 +711,27 @@ if __name__ == "__main__":
                     output_alignments.write(current_line_alignment + "\n")
                     continue 
 
-            if not args.sp_input:
-                source_line_sp = " ".join(source_sp_model.encode(source_line,out_type=str))
-                target_line_sp = " ".join(target_sp_model.encode(target_line,out_type=str))
+            # mark long sentences that break stanza
+            if len(source_line) > 2000 or len(target_line) > 2000:
+                source_line_sp = "OVERLONG_SENTENCE"
+                target_line_sp = "OVERLONG_SENTENCE"
+                current_alignment_dict = {}
+                current_line_alignment = ""
             else:
-                source_line_sp = source_line
-                target_line_sp = target_line
-
-            current_alignment_dict = {}
-            for token_alignment in current_line_alignment.split():
-                source_index, target_index = [int(x) for x in token_alignment.split('-') if '-' in token_alignment]
-                if source_index in current_alignment_dict:
-                    current_alignment_dict[source_index].append(target_index)
+                if not args.sp_input:
+                    source_line_sp = " ".join(source_sp_model.encode(source_line,out_type=str))
+                    target_line_sp = " ".join(target_sp_model.encode(target_line,out_type=str))
                 else:
-                    current_alignment_dict[source_index] = [target_index]
+                    source_line_sp = source_line
+                    target_line_sp = target_line
+
+                current_alignment_dict = {}
+                for token_alignment in current_line_alignment.split():
+                    source_index, target_index = [int(x) for x in token_alignment.split('-') if '-' in token_alignment]
+                    if source_index in current_alignment_dict:
+                        current_alignment_dict[source_index].append(target_index)
+                    else:
+                        current_alignment_dict[source_index] = [target_index]
 
             #check if an annotation of the line exists already in the annotation file
             existing_term_annotation = existing_term_annotations.readline()
@@ -736,7 +747,7 @@ if __name__ == "__main__":
                 if int_max_sents != -1 and sents_with_terms_count >= int_max_sents:
                     continue
             else:
-                #start batching for stanza
+                #start batching forV stanza
                 batch_counter += 1
                 batch.append((source_line_sp, target_line_sp, current_alignment_dict, current_line_alignment))
                 if batch_counter % args.batch_size == 0:
